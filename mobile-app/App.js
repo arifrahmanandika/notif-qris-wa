@@ -11,6 +11,8 @@ import {
 import { StatusBar } from "expo-status-bar";
 import { io } from "socket.io-client";
 import * as Speech from "expo-speech";
+import { Audio } from "expo-av";
+import * as FileSystem from "expo-file-system/legacy";
 import { ENV, SOCKET_IO_OPTIONS, logConfig } from "./config";
 
 export default function App() {
@@ -20,10 +22,103 @@ export default function App() {
   const [errorMessage, setErrorMessage] = useState("");
   const [connectionLog, setConnectionLog] = useState([]);
   const socketRef = useRef(null);
+  const soundRef = useRef(null);
+  const audioFileUri = `${FileSystem.cacheDirectory}qris-audio.mp3`;
+
+  const uint8ArrayToBase64 = (u8Arr) => {
+    const CHUNK_SIZE = 0x8000;
+    let index = 0;
+    let output = "";
+    while (index < u8Arr.length) {
+      const slice = u8Arr.subarray(
+        index,
+        Math.min(index + CHUNK_SIZE, u8Arr.length),
+      );
+      output += String.fromCharCode.apply(null, slice);
+      index += CHUNK_SIZE;
+    }
+
+    const base64Chars =
+      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=";
+    let result = "";
+    let remainder = output.length % 3;
+    for (let i = 0; i < output.length; i += 3) {
+      const a = output.charCodeAt(i);
+      const b = output.charCodeAt(i + 1);
+      const c = output.charCodeAt(i + 2);
+      const triple = (a << 16) | (b << 8) | c;
+      result += base64Chars[(triple >> 18) & 0x3f];
+      result += base64Chars[(triple >> 12) & 0x3f];
+      result += base64Chars[(triple >> 6) & 0x3f];
+      result += base64Chars[triple & 0x3f];
+    }
+    if (remainder === 1) {
+      const a = output.charCodeAt(output.length - 1);
+      const triple = a << 16;
+      result =
+        result.slice(0, -2) +
+        base64Chars[(triple >> 18) & 0x3f] +
+        base64Chars[(triple >> 12) & 0x3f] +
+        "==";
+    } else if (remainder === 2) {
+      const a = output.charCodeAt(output.length - 2);
+      const b = output.charCodeAt(output.length - 1);
+      const triple = (a << 16) | (b << 8);
+      result =
+        result.slice(0, -1) +
+        base64Chars[(triple >> 18) & 0x3f] +
+        base64Chars[(triple >> 12) & 0x3f] +
+        base64Chars[(triple >> 6) & 0x3f] +
+        "=";
+    }
+    return result;
+  };
+
+  const getAudioDataAsUint8Array = (audioData) => {
+    if (!audioData) return null;
+    if (audioData instanceof Uint8Array) return audioData;
+    if (audioData instanceof ArrayBuffer) return new Uint8Array(audioData);
+    if (audioData.data && Array.isArray(audioData.data))
+      return new Uint8Array(audioData.data);
+    if (Array.isArray(audioData)) return new Uint8Array(audioData);
+    return null;
+  };
+
+  const unloadCurrentSound = async () => {
+    if (soundRef.current) {
+      try {
+        await soundRef.current.unloadAsync();
+      } catch (error) {
+        console.warn("Failed to unload previous sound:", error);
+      }
+      soundRef.current = null;
+    }
+  };
+
+  const playAudioFromBinary = async (audioData) => {
+    const audioBuffer = getAudioDataAsUint8Array(audioData);
+    if (!audioBuffer) {
+      throw new Error("Invalid audio data received");
+    }
+
+    const base64 = uint8ArrayToBase64(audioBuffer);
+    await FileSystem.writeAsStringAsync(audioFileUri, base64, {
+      encoding: FileSystem.EncodingType?.Base64 || "base64",
+    });
+
+    await unloadCurrentSound();
+    const { sound: newSound } = await Audio.Sound.createAsync(
+      { uri: audioFileUri },
+      { shouldPlay: true },
+    );
+    soundRef.current = newSound;
+  };
 
   useEffect(() => {
-    // Log configuration on app start
     logConfig();
+    return () => {
+      unloadCurrentSound();
+    };
   }, []);
 
   const addLog = (message) => {
@@ -62,8 +157,16 @@ export default function App() {
 
       socket.on("qris-message", (data) => {
         addLog(`Received message: ${data.text}`);
-        Speech.speak(data.text, { language: "id-ID" });
         setMessages((prev) => [data, ...prev]);
+
+        if (data.audio) {
+          playAudioFromBinary(data.audio).catch((error) => {
+            addLog(`Audio playback failed: ${error.message}`);
+            Speech.speak(data.text, { language: "id-ID" });
+          });
+        } else {
+          Speech.speak(data.text, { language: "id-ID" });
+        }
       });
 
       socket.on("error", (error) => {

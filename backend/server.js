@@ -1,9 +1,11 @@
 const fs = require("fs");
 const path = require("path");
+const https = require("https");
 const express = require("express");
 const http = require("http");
 const cors = require("cors");
 const qrcode = require("qrcode-terminal");
+const gtts = require("google-tts-api");
 const { Server } = require("socket.io");
 const { Client, LocalAuth } = require("whatsapp-web.js");
 
@@ -60,6 +62,36 @@ function normalizeJid(raw) {
 function isAllowedSender(from) {
   // Semua sender dianggap valid; hanya validasi kata kunci yang digunakan.
   return true;
+}
+
+async function getTtsAudioBuffer(text, lang = "id", slow = false) {
+  try {
+    const audioUrl = gtts.getAudioUrl(text, {
+      lang,
+      slow,
+      host: "https://translate.google.com",
+    });
+
+    return await new Promise((resolve, reject) => {
+      https
+        .get(audioUrl, (res) => {
+          if (res.statusCode !== 200) {
+            reject(
+              new Error(`TTS request failed with status ${res.statusCode}`),
+            );
+            return;
+          }
+
+          const chunks = [];
+          res.on("data", (chunk) => chunks.push(chunk));
+          res.on("end", () => resolve(Buffer.concat(chunks)));
+        })
+        .on("error", reject);
+    });
+  } catch (error) {
+    console.error("Error generating TTS audio:", error);
+    throw error;
+  }
 }
 
 function containsKeyword(text) {
@@ -153,7 +185,18 @@ client.on("message", async (message) => {
       timestamp: new Date().toISOString(),
     };
 
-    io.emit("qris-message", payload);
+    let audioBuffer = null;
+    try {
+      audioBuffer = await getTtsAudioBuffer(formattedMessage);
+    } catch (error) {
+      console.error("TTS audio generation failed:", error);
+    }
+
+    const emitPayload = audioBuffer
+      ? { ...payload, audio: audioBuffer }
+      : payload;
+
+    io.emit("qris-message", emitPayload);
     console.log("Broadcasted QRIS message to WebSocket clients.");
 
     const adminJid = normalizeJid(ADMIN_NUMBER);
