@@ -1,23 +1,27 @@
 {
   "expo": {
-    "name": "Notif QRIS WA App",
-    "slug": "notif-qris-wa-app",
+    "name": "qris-wa-app",
+    "slug": "qris-wa-app",
     "version": "1.0.0",
-    "orientation": "portrait",
-    "userInterfaceStyle": "light",
-    "assetBundlePatterns": ["**/*"],
+    "assetBundlePatterns": [
+      "**/*"
+    ],
     "ios": {
-      "supportsTablet": true
+      "supportsTabletMode": true
     },
     "android": {
-      "package": "com.dkrl.notifqriswaapp",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#FFFFFF"
+      },
+      "package": "com.example.qriswaapp",
+      "versionCode": 1,
       "permissions": [
         "android.permission.INTERNET",
         "android.permission.CHANGE_NETWORK_STATE",
         "android.permission.ACCESS_NETWORK_STATE"
       ]
     },
-    "web": {},
     "plugins": [
       [
         "expo-build-properties",
@@ -27,11 +31,6 @@
           }
         }
       ]
-    ],
-    "extra": {
-      "eas": {
-        "projectId": "002d697d-ee63-44c9-965e-fd6b8870fd99"
-      }
-    }
+    ]
   }
 }

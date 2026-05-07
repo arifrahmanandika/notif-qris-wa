@@ -11,40 +11,69 @@ import {
 import { StatusBar } from "expo-status-bar";
 import { io } from "socket.io-client";
 import * as Speech from "expo-speech";
+import { ENV, SOCKET_IO_OPTIONS, logConfig } from "./config";
 
 export default function App() {
   const [connected, setConnected] = useState(false);
   const [messages, setMessages] = useState([]);
-  const [serverAddress, setServerAddress] = useState(
-    "http://192.168.1.101:3000",
-  );
+  const [serverAddress, setServerAddress] = useState(ENV.BACKEND_URL);
+  const [errorMessage, setErrorMessage] = useState("");
+  const [connectionLog, setConnectionLog] = useState([]);
   const socketRef = useRef(null);
 
+  useEffect(() => {
+    // Log configuration on app start
+    logConfig();
+  }, []);
+
+  const addLog = (message) => {
+    console.log("[QRIS-WA]", message);
+    setConnectionLog((prev) => [
+      ...prev.slice(-9),
+      `${new Date().toLocaleTimeString()}: ${message}`,
+    ]);
+  };
+
   const handleConnect = () => {
+    setErrorMessage("");
     if (socketRef.current) {
       socketRef.current.disconnect();
     }
     try {
-      const socket = io(serverAddress);
+      addLog(`Attempting to connect to ${serverAddress}`);
+      const socket = io(serverAddress, SOCKET_IO_OPTIONS);
       socketRef.current = socket;
 
       socket.on("connect", () => {
         setConnected(true);
+        setErrorMessage("");
+        addLog("✓ Connected successfully");
       });
 
-      socket.on("disconnect", () => {
+      socket.on("connect_error", (error) => {
+        addLog(`✗ Connection error: ${error.message}`);
+        setErrorMessage(`Connection Error: ${error.message}`);
+      });
+
+      socket.on("disconnect", (reason) => {
         setConnected(false);
+        addLog(`Disconnected: ${reason}`);
       });
 
       socket.on("qris-message", (data) => {
+        addLog(`Received message: ${data.text}`);
         Speech.speak(data.text, { language: "id-ID" });
         setMessages((prev) => [data, ...prev]);
       });
+
+      socket.on("error", (error) => {
+        addLog(`Socket error: ${error}`);
+        setErrorMessage(`Socket Error: ${error}`);
+      });
     } catch (error) {
-      Alert.alert(
-        "Error",
-        "Failed to connect to server. Please check the address.",
-      );
+      addLog(`Exception: ${error.message}`);
+      setErrorMessage(`Exception: ${error.message}`);
+      Alert.alert("Error", `Failed to connect: ${error.message}`);
     }
   };
 
@@ -68,9 +97,26 @@ export default function App() {
         onChangeText={setServerAddress}
       />
       <Button title="Connect" onPress={handleConnect} />
+
       <Text style={styles.status}>
-        Connection Status: {connected ? "Connected" : "Disconnected"}
+        Status: {connected ? "🟢 Connected" : "🔴 Disconnected"}
       </Text>
+
+      {errorMessage ? (
+        <View style={styles.errorContainer}>
+          <Text style={styles.errorText}>{errorMessage}</Text>
+        </View>
+      ) : null}
+
+      <Text style={styles.subtitle}>Connection Log:</Text>
+      <View style={styles.logContainer}>
+        {connectionLog.map((log, index) => (
+          <Text key={index} style={styles.logText}>
+            {log}
+          </Text>
+        ))}
+      </View>
+
       <Text style={styles.title}>Recent QRIS Messages</Text>
       <FlatList
         data={messages}
@@ -114,6 +160,41 @@ const styles = StyleSheet.create({
     fontWeight: "bold",
     marginBottom: 10,
     color: "#333",
+  },
+  errorContainer: {
+    backgroundColor: "#ffebee",
+    borderColor: "#c62828",
+    borderWidth: 1,
+    borderRadius: 5,
+    padding: 10,
+    marginBottom: 10,
+  },
+  errorText: {
+    color: "#c62828",
+    fontSize: 14,
+    fontWeight: "600",
+  },
+  subtitle: {
+    fontSize: 16,
+    fontWeight: "600",
+    marginTop: 10,
+    marginBottom: 5,
+    color: "#666",
+  },
+  logContainer: {
+    backgroundColor: "#fff",
+    borderColor: "#ddd",
+    borderWidth: 1,
+    borderRadius: 5,
+    padding: 10,
+    marginBottom: 15,
+    maxHeight: 120,
+  },
+  logText: {
+    fontSize: 12,
+    color: "#555",
+    marginBottom: 2,
+    fontFamily: "monospace",
   },
   message: {
     backgroundColor: "#fff",
