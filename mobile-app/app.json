@@ -1,0 +1,24 @@
+{
+  "expo": {
+    "name": "Notif QRIS WA App",
+    "slug": "notif-qris-wa-app",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "package": "com.dkrl.notifqriswaapp"
+    },
+    "web": {},
+    "extra": {
+      "eas": {
+        "projectId": "002d697d-ee63-44c9-965e-fd6b8870fd99"
+      }
+    }
+  }
+}
