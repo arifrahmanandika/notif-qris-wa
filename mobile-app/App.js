@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
+  AppState,
   View,
   Text,
   FlatList,
@@ -9,11 +10,32 @@ import {
   Alert,
 } from "react-native";
 import { StatusBar } from "expo-status-bar";
+import * as TaskManager from "expo-task-manager";
+import * as BackgroundFetch from "expo-background-fetch";
+import * as KeepAwake from "expo-keep-awake";
 import { io } from "socket.io-client";
 import * as Speech from "expo-speech";
 import { Audio } from "expo-av";
 import * as FileSystem from "expo-file-system/legacy";
-import { ENV, SOCKET_IO_OPTIONS, logConfig } from "./config";
+import {
+  ENV,
+  SOCKET_IO_OPTIONS,
+  BACKGROUND_TASK_NAME,
+  logConfig,
+} from "./config";
+
+// Define background task for keeping connection alive
+TaskManager.defineTask(BACKGROUND_TASK_NAME, async () => {
+  try {
+    console.log("[BACKGROUND] Background task started");
+    // Task runs periodically in background to keep socket alive
+    // The socket connection in the main app handles actual communication
+    return BackgroundFetch.BackgroundFetchResult.NewData;
+  } catch (error) {
+    console.log("[BACKGROUND] Background task error:", error);
+    return BackgroundFetch.BackgroundFetchResult.Failed;
+  }
+});
 
 export default function App() {
   const [connected, setConnected] = useState(false);
@@ -115,21 +137,43 @@ export default function App() {
   };
 
   useEffect(() => {
-    logConfig();
+    const initializeApp = async () => {
+      try {
+        logConfig();
+
+        // Enable keep awake to prevent device sleep
+        KeepAwake.activate();
+        console.log("[INIT] Keep awake activated");
+
+        // Register background fetch task
+        await BackgroundFetch.registerTaskAsync(BACKGROUND_TASK_NAME, {
+          minimumInterval: 15, // Check every 15 seconds minimum
+          stopOnTerminate: false, // Continue even if app is terminated
+          startOnBoot: true, // Start task on device boot
+        });
+        console.log("[INIT] Background fetch task registered");
+      } catch (error) {
+        console.log("[INIT] Error initializing background:", error);
+      }
+    };
+
+    initializeApp();
+
     return () => {
       unloadCurrentSound();
+      KeepAwake.deactivate();
     };
   }, []);
 
-  const addLog = (message) => {
+  const addLog = useCallback((message) => {
     console.log("[QRIS-WA]", message);
     setConnectionLog((prev) => [
       ...prev.slice(-9),
       `${new Date().toLocaleTimeString()}: ${message}`,
     ]);
-  };
+  }, []);
 
-  const handleConnect = () => {
+  const handleConnect = useCallback(() => {
     setErrorMessage("");
     if (socketRef.current) {
       socketRef.current.disconnect();
@@ -178,7 +222,7 @@ export default function App() {
       setErrorMessage(`Exception: ${error.message}`);
       Alert.alert("Error", `Failed to connect: ${error.message}`);
     }
-  };
+  }, [serverAddress, addLog]);
 
   useEffect(() => {
     handleConnect();
@@ -187,7 +231,25 @@ export default function App() {
         socketRef.current.disconnect();
       }
     };
-  }, []);
+  }, [handleConnect]);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener("change", (nextState) => {
+      addLog(`App state changed to ${nextState}`);
+      if (nextState === "active" && !connected) {
+        addLog("App returned to foreground, reconnecting socket if needed.");
+        handleConnect();
+      } else if (nextState === "background") {
+        addLog(
+          "App moved to background. Socket will stay connected via polling.",
+        );
+      }
+    });
+
+    return () => {
+      subscription.remove();
+    };
+  }, [connected, handleConnect, addLog]);
 
   return (
     <View style={styles.container}>
@@ -211,15 +273,6 @@ export default function App() {
         </View>
       ) : null}
 
-      <Text style={styles.subtitle}>Connection Log:</Text>
-      <View style={styles.logContainer}>
-        {connectionLog.map((log, index) => (
-          <Text key={index} style={styles.logText}>
-            {log}
-          </Text>
-        ))}
-      </View>
-
       <Text style={styles.title}>Recent QRIS Messages</Text>
       <FlatList
         data={messages}
@@ -233,6 +286,15 @@ export default function App() {
           </View>
         )}
       />
+
+      <Text style={styles.subtitle}>Connection Log:</Text>
+      <View style={styles.logContainer}>
+        {connectionLog.map((log, index) => (
+          <Text key={index} style={styles.logText}>
+            {log}
+          </Text>
+        ))}
+      </View>
     </View>
   );
 }
@@ -291,7 +353,6 @@ const styles = StyleSheet.create({
     borderRadius: 5,
     padding: 10,
     marginBottom: 15,
-    maxHeight: 120,
   },
   logText: {
     fontSize: 12,

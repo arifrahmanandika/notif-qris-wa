@@ -15,12 +15,16 @@ export const SOCKET_IO_OPTIONS = {
   reconnection: true,
   reconnectionDelay: 1000,
   reconnectionDelayMax: 5000,
-  reconnectionAttempts: 5,
-  transports: ["websocket", "polling"],
-  // Add extra debugging options
+  reconnectionAttempts: Infinity,
+  transports: ["polling", "websocket"],
   reconnectionEmit: {
     error: true,
   },
+  // Keep connection alive with longer timeout
+  pingInterval: 25000,
+  pingTimeout: 60000,
+  // Fallback to polling if websocket fails
+  upgrade: true,
 };
 
 // Helper function to validate URL
@@ -46,3 +50,6 @@ export const logConfig = () => {
   console.log("[CONFIG] Backend URL:", ENV.BACKEND_URL);
   console.log("[CONFIG] Socket IO Options:", SOCKET_IO_OPTIONS);
 };
+
+// Background task name
+export const BACKGROUND_TASK_NAME = "qris-background-task";
