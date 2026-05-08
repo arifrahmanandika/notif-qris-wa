@@ -390,10 +390,6 @@ export default function App() {
         Status: {connected ? "🟢 Connected" : "🔴 Disconnected"}
       </Text>
 
-      <Text style={styles.infoText}>
-        🔊 TTS menggunakan Foreground Service - tetap berbunyi di background
-      </Text>
-
       {errorMessage ? (
         <View style={styles.errorContainer}>
           <Text style={styles.errorText}>{errorMessage}</Text>
