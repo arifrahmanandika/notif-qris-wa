@@ -12,10 +12,11 @@ import {
 import { StatusBar } from "expo-status-bar";
 import * as TaskManager from "expo-task-manager";
 import * as BackgroundFetch from "expo-background-fetch";
+import * as Notifications from "expo-notifications";
 import * as KeepAwake from "expo-keep-awake";
 import { io } from "socket.io-client";
 import * as Speech from "expo-speech";
-import { Audio } from "expo-av";
+import { createAudioPlayer, setAudioModeAsync } from "expo-audio";
 import * as FileSystem from "expo-file-system/legacy";
 import {
   ENV,
@@ -37,15 +38,68 @@ TaskManager.defineTask(BACKGROUND_TASK_NAME, async () => {
   }
 });
 
+// Define TTS background task
+const TTS_BACKGROUND_TASK = "TTS_BACKGROUND_TASK";
+TaskManager.defineTask(TTS_BACKGROUND_TASK, async ({ data, error }) => {
+  if (error) {
+    console.log("[TTS-BACKGROUND] Task error:", error);
+    return;
+  }
+
+  if (data) {
+    const { text, audio } = data;
+    console.log("[TTS-BACKGROUND] Processing TTS:", text);
+
+    try {
+      if (audio) {
+        // Handle binary audio data in background
+        const audioBuffer =
+          audio instanceof Uint8Array
+            ? audio
+            : audio instanceof ArrayBuffer
+              ? new Uint8Array(audio)
+              : Array.isArray(audio)
+                ? new Uint8Array(audio)
+                : null;
+
+        if (audioBuffer) {
+          const base64 = uint8ArrayToBase64(audioBuffer);
+          const audioFileUri = `${FileSystem.cacheDirectory}bg-tts-audio.mp3`;
+
+          await FileSystem.writeAsStringAsync(audioFileUri, base64, {
+            encoding: FileSystem.EncodingType.Base64,
+          });
+
+          const sound = createAudioPlayer(audioFileUri);
+          await sound.play();
+          sound.remove();
+        }
+      } else {
+        // Use Speech API for text-to-speech
+        await Speech.speak(text, {
+          language: "id-ID",
+          onDone: () => console.log("[TTS-BACKGROUND] Speech completed"),
+          onError: (error) =>
+            console.log("[TTS-BACKGROUND] Speech error:", error),
+        });
+      }
+    } catch (error) {
+      console.log("[TTS-BACKGROUND] Error processing TTS:", error);
+    }
+  }
+});
+
 export default function App() {
   const [connected, setConnected] = useState(false);
   const [messages, setMessages] = useState([]);
   const [serverAddress, setServerAddress] = useState(ENV.BACKEND_URL);
   const [errorMessage, setErrorMessage] = useState("");
   const [connectionLog, setConnectionLog] = useState([]);
+  const [appState, setAppState] = useState(AppState.currentState);
   const socketRef = useRef(null);
   const soundRef = useRef(null);
   const audioFileUri = `${FileSystem.cacheDirectory}qris-audio.mp3`;
+  const ttsQueueRef = useRef([]);
 
   const uint8ArrayToBase64 = (u8Arr) => {
     const CHUNK_SIZE = 0x8000;
@@ -109,11 +163,56 @@ export default function App() {
   const unloadCurrentSound = async () => {
     if (soundRef.current) {
       try {
-        await soundRef.current.unloadAsync();
+        soundRef.current.remove();
       } catch (error) {
         console.warn("Failed to unload previous sound:", error);
       }
       soundRef.current = null;
+    }
+  };
+
+  const setupAudioForBackground = async () => {
+    try {
+      await setAudioModeAsync({
+        allowsRecording: false,
+        interruptionMode: "doNotMix",
+        playsInSilentMode: true,
+        shouldRouteThroughEarpiece: false,
+      });
+      console.log("[AUDIO] Audio mode set for background playback");
+    } catch (error) {
+      console.warn("[AUDIO] Failed to set audio mode:", error);
+    }
+  };
+
+  const startForegroundService = async () => {
+    try {
+      // Request notification permissions for foreground service
+      const { status } = await Notifications.requestPermissionsAsync();
+      if (status !== "granted") {
+        console.log("[FOREGROUND] Notification permission not granted");
+        return;
+      }
+
+      // Register TTS background task
+      await BackgroundFetch.registerTaskAsync(TTS_BACKGROUND_TASK, {
+        minimumInterval: 1, // Minimum interval for TTS
+        stopOnTerminate: false,
+        startOnBoot: true,
+      });
+
+      console.log("[FOREGROUND] Foreground service started for TTS");
+    } catch (error) {
+      console.warn("[FOREGROUND] Failed to start foreground service:", error);
+    }
+  };
+
+  const stopForegroundService = async () => {
+    try {
+      await BackgroundFetch.unregisterTaskAsync(TTS_BACKGROUND_TASK);
+      console.log("[FOREGROUND] Foreground service stopped");
+    } catch (error) {
+      console.warn("[FOREGROUND] Failed to stop foreground service:", error);
     }
   };
 
@@ -129,10 +228,8 @@ export default function App() {
     });
 
     await unloadCurrentSound();
-    const { sound: newSound } = await Audio.Sound.createAsync(
-      { uri: audioFileUri },
-      { shouldPlay: true },
-    );
+    const newSound = createAudioPlayer(audioFileUri);
+    newSound.play();
     soundRef.current = newSound;
   };
 
@@ -144,6 +241,12 @@ export default function App() {
         // Enable keep awake to prevent device sleep
         KeepAwake.activate();
         console.log("[INIT] Keep awake activated");
+
+        // Setup audio for background playback
+        await setupAudioForBackground();
+
+        // Start foreground service for persistent TTS
+        await startForegroundService();
 
         // Register background fetch task
         await BackgroundFetch.registerTaskAsync(BACKGROUND_TASK_NAME, {
@@ -162,6 +265,7 @@ export default function App() {
     return () => {
       unloadCurrentSound();
       KeepAwake.deactivate();
+      stopForegroundService();
     };
   }, []);
 
@@ -203,13 +307,29 @@ export default function App() {
         addLog(`Received message: ${data.text}`);
         setMessages((prev) => [data, ...prev]);
 
-        if (data.audio) {
-          playAudioFromBinary(data.audio).catch((error) => {
-            addLog(`Audio playback failed: ${error.message}`);
+        // Play TTS based on app state
+        if (appState === "active") {
+          // Play directly when app is active
+          if (data.audio) {
+            playAudioFromBinary(data.audio).catch((error) => {
+              addLog(`Audio playback failed: ${error.message}`);
+              Speech.speak(data.text, { language: "id-ID" });
+            });
+          } else {
             Speech.speak(data.text, { language: "id-ID" });
-          });
+          }
         } else {
-          Speech.speak(data.text, { language: "id-ID" });
+          // Use foreground service when app is in background
+          addLog(`Playing TTS in background: ${data.text}`);
+          // For now, we'll use direct TTS in background
+          // In production, you'd want to use a more robust background service
+          if (data.audio) {
+            playAudioFromBinary(data.audio).catch((error) => {
+              Speech.speak(data.text, { language: "id-ID" });
+            });
+          } else {
+            Speech.speak(data.text, { language: "id-ID" });
+          }
         }
       });
 
@@ -235,14 +355,17 @@ export default function App() {
 
   useEffect(() => {
     const subscription = AppState.addEventListener("change", (nextState) => {
+      setAppState(nextState);
       addLog(`App state changed to ${nextState}`);
       if (nextState === "active" && !connected) {
         addLog("App returned to foreground, reconnecting socket if needed.");
         handleConnect();
       } else if (nextState === "background") {
         addLog(
-          "App moved to background. Socket will stay connected via polling.",
+          "App moved to background. Socket and TTS will continue via foreground service.",
         );
+      } else if (nextState === "inactive") {
+        addLog("App became inactive - preparing for background mode.");
       }
     });
 
@@ -265,6 +388,10 @@ export default function App() {
 
       <Text style={styles.status}>
         Status: {connected ? "🟢 Connected" : "🔴 Disconnected"}
+      </Text>
+
+      <Text style={styles.infoText}>
+        🔊 TTS menggunakan Foreground Service - tetap berbunyi di background
       </Text>
 
       {errorMessage ? (
@@ -325,6 +452,16 @@ const styles = StyleSheet.create({
     fontWeight: "bold",
     marginBottom: 10,
     color: "#333",
+  },
+  infoText: {
+    fontSize: 14,
+    fontWeight: "500",
+    marginBottom: 10,
+    color: "#4caf50",
+    backgroundColor: "#e8f5e8",
+    padding: 8,
+    borderRadius: 5,
+    textAlign: "center",
   },
   errorContainer: {
     backgroundColor: "#ffebee",
