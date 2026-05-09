@@ -3,12 +3,8 @@
 
 export const ENV = {
   // Change this to match your backend server
-  BACKEND_URL: process.env.BACKEND_URL || "http://192.168.1.101:3000", // Default: development server
-
-  // Alternative configurations:
-  // Production HTTPS: "https://api.yourdomain.com:3000"
-  // Emulator Android: "http://10.0.2.2:3000"
-  // Device (if different network): "http://192.168.x.x:3000"
+  BACKEND_URL:
+    process.env.EXPO_PUBLIC_BACKEND_URL || "http://192.168.1.101:3000", // Default: development server
 };
 
 export const SOCKET_IO_OPTIONS = {
