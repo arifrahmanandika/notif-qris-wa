@@ -23,7 +23,59 @@ import {
   SOCKET_IO_OPTIONS,
   BACKGROUND_TASK_NAME,
   logConfig,
+  isValidUrl,
 } from "./config";
+
+const CONFIG_FILE_URI = `${FileSystem.documentDirectory}qris-wa-config.json`;
+
+const uint8ArrayToBase64 = (u8Arr) => {
+  const CHUNK_SIZE = 0x8000;
+  let index = 0;
+  let output = "";
+  while (index < u8Arr.length) {
+    const slice = u8Arr.subarray(
+      index,
+      Math.min(index + CHUNK_SIZE, u8Arr.length),
+    );
+    output += String.fromCharCode.apply(null, slice);
+    index += CHUNK_SIZE;
+  }
+
+  const base64Chars =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=";
+  let result = "";
+  let remainder = output.length % 3;
+  for (let i = 0; i < output.length; i += 3) {
+    const a = output.charCodeAt(i);
+    const b = output.charCodeAt(i + 1);
+    const c = output.charCodeAt(i + 2);
+    const triple = (a << 16) | (b << 8) | c;
+    result += base64Chars[(triple >> 18) & 0x3f];
+    result += base64Chars[(triple >> 12) & 0x3f];
+    result += base64Chars[(triple >> 6) & 0x3f];
+    result += base64Chars[triple & 0x3f];
+  }
+  if (remainder === 1) {
+    const a = output.charCodeAt(output.length - 1);
+    const triple = a << 16;
+    result =
+      result.slice(0, -2) +
+      base64Chars[(triple >> 18) & 0x3f] +
+      base64Chars[(triple >> 12) & 0x3f] +
+      "==";
+  } else if (remainder === 2) {
+    const a = output.charCodeAt(output.length - 2);
+    const b = output.charCodeAt(output.length - 1);
+    const triple = (a << 16) | (b << 8);
+    result =
+      result.slice(0, -1) +
+      base64Chars[(triple >> 18) & 0x3f] +
+      base64Chars[(triple >> 12) & 0x3f] +
+      base64Chars[(triple >> 6) & 0x3f] +
+      "=";
+  }
+  return result;
+};
 
 // Define background task for keeping connection alive
 TaskManager.defineTask(BACKGROUND_TASK_NAME, async () => {
@@ -101,53 +153,45 @@ export default function App() {
   const audioFileUri = `${FileSystem.cacheDirectory}qris-audio.mp3`;
   const ttsQueueRef = useRef([]);
 
-  const uint8ArrayToBase64 = (u8Arr) => {
-    const CHUNK_SIZE = 0x8000;
-    let index = 0;
-    let output = "";
-    while (index < u8Arr.length) {
-      const slice = u8Arr.subarray(
-        index,
-        Math.min(index + CHUNK_SIZE, u8Arr.length),
-      );
-      output += String.fromCharCode.apply(null, slice);
-      index += CHUNK_SIZE;
-    }
+  const addLog = useCallback((message) => {
+    console.log("[QRIS-WA]", message);
+    setConnectionLog((prev) => [
+      ...prev.slice(-9),
+      `${new Date().toLocaleTimeString()}: ${message}`,
+    ]);
+  }, []);
 
-    const base64Chars =
-      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=";
-    let result = "";
-    let remainder = output.length % 3;
-    for (let i = 0; i < output.length; i += 3) {
-      const a = output.charCodeAt(i);
-      const b = output.charCodeAt(i + 1);
-      const c = output.charCodeAt(i + 2);
-      const triple = (a << 16) | (b << 8) | c;
-      result += base64Chars[(triple >> 18) & 0x3f];
-      result += base64Chars[(triple >> 12) & 0x3f];
-      result += base64Chars[(triple >> 6) & 0x3f];
-      result += base64Chars[triple & 0x3f];
+  const loadSavedServerAddress = async () => {
+    try {
+      const info = await FileSystem.getInfoAsync(CONFIG_FILE_URI);
+      if (info.exists) {
+        const saved = await FileSystem.readAsStringAsync(CONFIG_FILE_URI);
+        const parsed = JSON.parse(saved || "{}");
+        if (parsed.serverAddress && isValidUrl(parsed.serverAddress)) {
+          setServerAddress(parsed.serverAddress);
+          addLog(`Loaded saved server address: ${parsed.serverAddress}`);
+          return parsed.serverAddress;
+        }
+      }
+    } catch (error) {
+      addLog(`Failed to load saved server address: ${error.message}`);
     }
-    if (remainder === 1) {
-      const a = output.charCodeAt(output.length - 1);
-      const triple = a << 16;
-      result =
-        result.slice(0, -2) +
-        base64Chars[(triple >> 18) & 0x3f] +
-        base64Chars[(triple >> 12) & 0x3f] +
-        "==";
-    } else if (remainder === 2) {
-      const a = output.charCodeAt(output.length - 2);
-      const b = output.charCodeAt(output.length - 1);
-      const triple = (a << 16) | (b << 8);
-      result =
-        result.slice(0, -1) +
-        base64Chars[(triple >> 18) & 0x3f] +
-        base64Chars[(triple >> 12) & 0x3f] +
-        base64Chars[(triple >> 6) & 0x3f] +
-        "=";
+    return null;
+  };
+
+  const saveServerAddress = async (address) => {
+    try {
+      if (!address || !isValidUrl(address)) {
+        return;
+      }
+      await FileSystem.writeAsStringAsync(
+        CONFIG_FILE_URI,
+        JSON.stringify({ serverAddress: address }),
+      );
+      addLog(`Saved server address: ${address}`);
+    } catch (error) {
+      addLog(`Failed to save server address: ${error.message}`);
     }
-    return result;
   };
 
   const getAudioDataAsUint8Array = (audioData) => {
@@ -237,6 +281,7 @@ export default function App() {
     const initializeApp = async () => {
       try {
         logConfig();
+        await loadSavedServerAddress();
 
         // Enable keep awake to prevent device sleep
         KeepAwake.activate();
@@ -269,19 +314,22 @@ export default function App() {
     };
   }, []);
 
-  const addLog = useCallback((message) => {
-    console.log("[QRIS-WA]", message);
-    setConnectionLog((prev) => [
-      ...prev.slice(-9),
-      `${new Date().toLocaleTimeString()}: ${message}`,
-    ]);
-  }, []);
-
-  const handleConnect = useCallback(() => {
+  const handleConnect = useCallback(async () => {
     setErrorMessage("");
+    if (!serverAddress || !isValidUrl(serverAddress)) {
+      const message =
+        "Invalid server address. Use a valid URL like http://192.168.1.101:3000";
+      setErrorMessage(message);
+      addLog(message);
+      return;
+    }
+
     if (socketRef.current) {
       socketRef.current.disconnect();
     }
+
+    await saveServerAddress(serverAddress);
+
     try {
       addLog(`Attempting to connect to ${serverAddress}`);
       const socket = io(serverAddress, SOCKET_IO_OPTIONS);
