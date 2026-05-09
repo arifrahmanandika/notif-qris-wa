@@ -3,7 +3,7 @@
 
 export const ENV = {
   // Change this to match your backend server
-  BACKEND_URL: "http://192.168.1.101:3000", // Default: development server
+  BACKEND_URL: process.env.BACKEND_URL || "http://192.168.1.101:3000", // Default: development server
 
   // Alternative configurations:
   // Production HTTPS: "https://api.yourdomain.com:3000"
